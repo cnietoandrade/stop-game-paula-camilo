@@ -14,14 +14,14 @@
   // 🔧 REEMPLAZÁ ESTOS VALORES CON TU FIREBASE
   // ──────────────────────────────────────────────
   const firebaseConfig = {
-  apiKey: "AIzaSyDVXSwzrjfS-UDzxTEAXl5s2hUEVhuGPdY",
-  authDomain: "juego-stop-paula-camilo.firebaseapp.com",
-  databaseURL: "https://juego-stop-paula-camilo-default-rtdb.firebaseio.com",
-  projectId: "juego-stop-paula-camilo",
-  storageBucket: "juego-stop-paula-camilo.firebasestorage.app",
-  messagingSenderId: "938477421109",
-  appId: "1:938477421109:web:f3630a3cd04441172f277c"
-};
+    apiKey: "AIzaSyDVXSwzrjfS-UDzxTEAXl5s2hUEVhuGPdY",
+    authDomain: "juego-stop-paula-camilo.firebaseapp.com",
+    databaseURL: "https://juego-stop-paula-camilo-default-rtdb.firebaseio.com",
+    projectId: "juego-stop-paula-camilo",
+    storageBucket: "juego-stop-paula-camilo.firebasestorage.app",
+    messagingSenderId: "938477421109",
+    appId: "1:938477421109:web:f3630a3cd04441172f277c"
+  };
 
   const app = initializeApp(firebaseConfig);
   const db = getDatabase(app);
@@ -343,17 +343,12 @@
   // EVENT BINDING
   // ──────────────────────────────────────────────
   function bindEvents(state) {
-    document.querySelectorAll('[data-action]').forEach(el => {
-      el.addEventListener('click', e => handleAction(e.currentTarget.dataset.action, e.currentTarget, state));
-    });
-
     // Auto-save answers while typing
     document.querySelectorAll('.answer-input').forEach(input => {
       input.addEventListener('input', async e => {
         const idx = e.target.dataset.cat;
         const val = e.target.value;
-        const path = `answers/${myPlayer}/${idx}`;
-        await update(gameRef, { [path]: val });
+        await update(gameRef, { [`answers/${myPlayer}/${idx}`]: val });
       });
     });
   }
@@ -508,7 +503,14 @@
   }
 
   // ── BOOT ──
-  window.addEventListener('DOMContentLoaded', () => render({}));
+  // Use event delegation on document for all clicks — avoids timing issues with module loading
+  document.addEventListener('click', e => {
+    const el = e.target.closest('[data-action]');
+    if (el) handleAction(el.dataset.action, el, currentState);
+  });
+
+  // Render initial screen immediately (module runs after DOM is ready)
+  render({});
 </script>
 
 <style>
