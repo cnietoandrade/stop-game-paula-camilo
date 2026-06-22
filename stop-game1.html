@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STOP! 🔥</title>
+
+<!-- Firebase -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, set, get, onValue, update, remove } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+  // ──────────────────────────────────────────────
+  // 🔧 REEMPLAZÁ ESTOS VALORES CON TU FIREBASE
+  // ──────────────────────────────────────────────
+  const firebaseConfig = {
+  apiKey: "AIzaSyDVXSwzrjfS-UDzxTEAXl5s2hUEVhuGPdY",
+  authDomain: "juego-stop-paula-camilo.firebaseapp.com",
+  databaseURL: "https://juego-stop-paula-camilo-default-rtdb.firebaseio.com",
+  projectId: "juego-stop-paula-camilo",
+  storageBucket: "juego-stop-paula-camilo.firebasestorage.app",
+  messagingSenderId: "938477421109",
+  appId: "1:938477421109:web:f3630a3cd04441172f277c"
+};
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
+  // ──────────────────────────────────────────────
+  // STATE
+  // ──────────────────────────────────────────────
+  let myPlayer = null; // 'camilo' | 'paula'
+  let gameRef = ref(db, 'stop_game');
+  let unsubscribe = null;
+  let currentState = {};
+
+  const DEFAULT_CATEGORIES = [
+    "Nombre propio", "Animal", "Comida", "Bebida",
+    "Adjetivo", "País/Ciudad", "Famoso/Deportista"
+  ];
+
+  const ALPHABET = "ABCDEFGHIJKLMNOPRSTV".split("");
+
+  // ──────────────────────────────────────────────
+  // FIREBASE HELPERS
+  // ──────────────────────────────────────────────
+  async function getGame() {
+    const snap = await get(gameRef);
+    return snap.exists() ? snap.val() : null;
+  }
+
+  async function setGame(data) {
+    await set(gameRef, data);
+  }
+
+  async function updateGame(data) {
+    await update(gameRef, data);
+  }
+
+  function listenGame(cb) {
+    if (unsubscribe) unsubscribe();
+    unsubscribe = onValue(gameRef, snap => {
+      currentState = snap.exists() ? snap.val() : {};
+      cb(currentState);
+    });
+  }
+
+  // ──────────────────────────────────────────────
+  // RENDER ENGINE
+  // ──────────────────────────────────────────────
+  function render(state) {
+    const app = document.getElementById('app');
+
+    if (!myPlayer) {
+      app.innerHTML = renderSelectPlayer();
+      return;
+    }
+
+    const phase = state?.phase || 'lobby';
+
+    if (phase === 'lobby') app.innerHTML = renderLobby(state);
+    else if (phase === 'playing') app.innerHTML = renderPlaying(state);
+    else if (phase === 'stop_called') app.innerHTML = renderStopCalled(state);
+    else if (phase === 'voting') app.innerHTML = renderVoting(state);
+    else if (phase === 'results') app.innerHTML = renderResults(state);
+
+    bindEvents(state);
+  }
+
+  // ──────────────────────────────────────────────
+  // SCREENS
+  // ──────────────────────────────────────────────
+  function renderSelectPlayer() {
+    return `
+    <div class="screen center-screen">
+      <div class="logo">S T O P</div>
+      <p class="sub">¿Quién sos?</p>
+      <div class="player-btns">
+        <button class="player-btn camilo-btn" data-action="select-camilo">
+          <span class="player-emoji">🧔</span>
+          <span>Camilo</span>
+        </button>
+        <button class="player-btn paula-btn" data-action="select-paula">
+          <span class="player-emoji">👩</span>
+          <span>Paula</span>
+        </button>
+      </div>
+    </div>`;
+  }
+
+  function renderLobby(state) {
+    const other = myPlayer === 'camilo' ? 'paula' : 'camilo';
+    const otherName = other === 'paula' ? 'Paula' : 'Camilo';
+    const otherOnline = state?.players?.[other]?.online;
+    const myOnline = state?.players?.[myPlayer]?.online;
+    const cats = state?.categories || DEFAULT_CATEGORIES;
+    const isHost = myPlayer === 'camilo';
+
+    return `
+    <div class="screen">
+      <div class="header-bar">
+        <span class="logo-sm">STOP</span>
+        <span class="player-tag ${myPlayer}">${myPlayer === 'camilo' ? '🧔 Camilo' : '👩 Paula'}</span>
+      </div>
+
+      <div class="lobby-section">
+        <h2>Sala de espera</h2>
+
+        <div class="online-status">
+          <div class="status-dot ${myOnline ? 'on' : 'off'}"></div>
+          <span>${myPlayer === 'camilo' ? '🧔 Camilo' : '👩 Paula'} (vos)</span>
+          <div class="status-dot ${otherOnline ? 'on' : 'off'}" style="margin-left:16px"></div>
+          <span>${otherName} ${otherOnline ? '✓ conectado' : '⏳ esperando...'}</span>
+        </div>
+
+        <div class="categories-section">
+          <div class="section-label">Categorías de esta partida ${isHost ? '<span class="edit-hint">(editá o eliminá)</span>' : ''}</div>
+          <div class="cat-list" id="cat-list">
+            ${cats.map((c, i) => `
+              <div class="cat-chip">
+                ${isHost ? `<input class="cat-input" data-idx="${i}" value="${c}">
+                <button class="cat-del" data-action="del-cat" data-idx="${i}">✕</button>` 
+                : `<span>${c}</span>`}
+              </div>
+            `).join('')}
+          </div>
+          ${isHost ? `
+          <div class="add-cat-row">
+            <input id="new-cat" placeholder="Nueva categoría..." class="new-cat-input">
+            <button data-action="add-cat" class="btn-secondary">+ Agregar</button>
+          </div>
+          <button data-action="save-cats" class="btn-secondary save-btn">💾 Guardar categorías</button>
+          ` : '<p class="hint">Camilo puede editar las categorías</p>'}
+        </div>
+
+        <div class="score-preview">
+          <div class="score-card camilo">
+            <span class="score-name">🧔 Camilo</span>
+            <span class="score-val">${state?.scores?.camilo || 0}</span>
+          </div>
+          <div class="score-card paula">
+            <span class="score-name">👩 Paula</span>
+            <span class="score-val">${state?.scores?.paula || 0}</span>
+          </div>
+        </div>
+
+        ${isHost ? `
+        <button data-action="start-game" class="btn-primary big-btn" ${!otherOnline ? 'disabled' : ''}>
+          ${!otherOnline ? '⏳ Esperando a Paula...' : '🎲 Sortear letra y empezar'}
+        </button>` : `
+        <div class="waiting-msg">⏳ Esperando que Camilo inicie la ronda...</div>
+        `}
+      </div>
+    </div>`;
+  }
+
+  function renderPlaying(state) {
+    const letter = state?.currentLetter || '?';
+    const cats = state?.categories || DEFAULT_CATEGORIES;
+    const myAnswers = state?.answers?.[myPlayer] || {};
+    const stopper = state?.stopper;
+
+    return `
+    <div class="screen playing-screen">
+      <div class="header-bar">
+        <span class="logo-sm">STOP</span>
+        <div class="scores-mini">
+          <span class="camilo">🧔 ${state?.scores?.camilo || 0}</span>
+          <span class="paula">👩 ${state?.scores?.paula || 0}</span>
+        </div>
+      </div>
+
+      <div class="letter-display">
+        <div class="letter-circle">${letter}</div>
+        <div class="letter-label">La letra es</div>
+      </div>
+
+      <div class="answers-form" id="answers-form">
+        ${cats.map((cat, i) => `
+          <div class="answer-row">
+            <label class="answer-label">${cat}</label>
+            <input 
+              class="answer-input" 
+              data-cat="${i}"
+              placeholder="${cat} con ${letter}..."
+              value="${myAnswers[i] || ''}"
+              ${stopper ? 'disabled' : ''}
+            >
+          </div>
+        `).join('')}
+      </div>
+
+      ${!stopper ? `
+      <button data-action="call-stop" class="btn-stop">
+        🛑 ¡STOP!
+      </button>` : `
+      <div class="stop-called-banner">
+        🛑 ${stopper === myPlayer ? '¡Vos gritaste STOP!' : (stopper === 'camilo' ? '🧔 Camilo' : '👩 Paula') + ' gritó STOP!'} Esperando votación...
+      </div>`}
+    </div>`;
+  }
+
+  function renderStopCalled(state) {
+    return `
+    <div class="screen center-screen">
+      <div class="stop-splash">🛑</div>
+      <div class="stop-text">¡STOP!</div>
+      <div class="stop-who">${state?.stopper === 'camilo' ? '🧔 Camilo' : '👩 Paula'} paró la ronda</div>
+      <div class="loading-dots">Cargando respuestas<span class="dot-anim">...</span></div>
+    </div>`;
+  }
+
+  function renderVoting(state) {
+    const other = myPlayer === 'camilo' ? 'paula' : 'camilo';
+    const otherName = other === 'paula' ? 'Paula' : 'Camilo';
+    const cats = state?.categories || DEFAULT_CATEGORIES;
+    const otherAnswers = state?.answers?.[other] || {};
+    const myVotes = state?.votes?.[myPlayer] || {};
+    const allVoted = state?.votes?.camilo && state?.votes?.paula;
+
+    return `
+    <div class="screen">
+      <div class="header-bar">
+        <span class="logo-sm">STOP</span>
+        <span class="round-tag">Votación</span>
+      </div>
+
+      <div class="voting-section">
+        <h2>¿Valen las respuestas de ${otherName}?</h2>
+        <p class="hint">Letra: <strong>${state?.currentLetter}</strong></p>
+
+        ${cats.map((cat, i) => {
+          const ans = otherAnswers[i] || '—';
+          const voted = myVotes[i];
+          return `
+          <div class="vote-row ${voted !== undefined ? (voted ? 'voted-yes' : 'voted-no') : ''}">
+            <div class="vote-cat">${cat}</div>
+            <div class="vote-ans">${ans || '<em>vacío</em>'}</div>
+            <div class="vote-btns">
+              <button class="vote-yes ${voted === true ? 'active' : ''}" data-action="vote-yes" data-idx="${i}">✅ Vale</button>
+              <button class="vote-no ${voted === false ? 'active' : ''}" data-action="vote-no" data-idx="${i}">❌ No vale</button>
+            </div>
+          </div>`;
+        }).join('')}
+
+        ${Object.keys(myVotes).length === cats.length ? `
+        <button data-action="submit-votes" class="btn-primary" ${allVoted ? 'disabled' : ''}>
+          ${allVoted ? '⏳ Esperando al otro jugador...' : '✅ Confirmar votos'}
+        </button>` : `
+        <p class="hint center">Votá todas las categorías para continuar</p>`}
+      </div>
+    </div>`;
+  }
+
+  function renderResults(state) {
+    const cats = state?.categories || DEFAULT_CATEGORIES;
+    const answersC = state?.answers?.camilo || {};
+    const answersP = state?.answers?.paula || {};
+    const votesC = state?.votes?.camilo || {}; // camilo votando a paula
+    const votesP = state?.votes?.paula || {}; // paula votando a camilo
+    const roundPts = state?.roundPoints || {};
+
+    return `
+    <div class="screen">
+      <div class="header-bar">
+        <span class="logo-sm">STOP</span>
+        <span class="round-tag">Resultados</span>
+      </div>
+
+      <div class="letter-pill">Letra: <strong>${state?.currentLetter}</strong></div>
+
+      <div class="results-table">
+        <div class="results-header">
+          <span>Categoría</span>
+          <span>🧔 Camilo</span>
+          <span>👩 Paula</span>
+        </div>
+        ${cats.map((cat, i) => {
+          const ansC = answersC[i] || '—';
+          const ansP = answersP[i] || '—';
+          const ptsC = roundPts?.camilo?.[i] ?? 0;
+          const ptsP = roundPts?.paula?.[i] ?? 0;
+          return `
+          <div class="results-row">
+            <span class="res-cat">${cat}</span>
+            <span class="res-ans ${ptsC === 100 ? 'unique' : ptsC === 50 ? 'shared' : 'zero'}">
+              ${ansC}<br><small>${ptsC} pts</small>
+            </span>
+            <span class="res-ans ${ptsP === 100 ? 'unique' : ptsP === 50 ? 'shared' : 'zero'}">
+              ${ansP}<br><small>${ptsP} pts</small>
+            </span>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <div class="round-totals">
+        <div class="round-total camilo">
+          <span>🧔 +${Object.values(roundPts?.camilo || {}).reduce((a,b) => a+b, 0)}</span>
+        </div>
+        <div class="round-total paula">
+          <span>👩 +${Object.values(roundPts?.paula || {}).reduce((a,b) => a+b, 0)}</span>
+        </div>
+      </div>
+
+      <div class="total-scores">
+        <div class="total-card camilo">
+          <span class="total-name">🧔 Camilo</span>
+          <span class="total-pts">${state?.scores?.camilo || 0}</span>
+        </div>
+        <div class="total-card paula">
+          <span class="total-name">👩 Paula</span>
+          <span class="total-pts">${state?.scores?.paula || 0}</span>
+        </div>
+      </div>
+
+      ${myPlayer === 'camilo' ? `
+      <button data-action="next-round" class="btn-primary big-btn">🎲 Nueva ronda</button>
+      ` : `<div class="waiting-msg">⏳ Esperando que Camilo inicie la siguiente ronda...</div>`}
+    </div>`;
+  }
+
+  // ──────────────────────────────────────────────
+  // EVENT BINDING
+  // ──────────────────────────────────────────────
+  function bindEvents(state) {
+    document.querySelectorAll('[data-action]').forEach(el => {
+      el.addEventListener('click', e => handleAction(e.currentTarget.dataset.action, e.currentTarget, state));
+    });
+
+    // Auto-save answers while typing
+    document.querySelectorAll('.answer-input').forEach(input => {
+      input.addEventListener('input', async e => {
+        const idx = e.target.dataset.cat;
+        const val = e.target.value;
+        const path = `answers/${myPlayer}/${idx}`;
+        await update(gameRef, { [path]: val });
+      });
+    });
+  }
+
+  async function handleAction(action, el, state) {
+    if (action === 'select-camilo') { myPlayer = 'camilo'; await joinGame(); }
+    if (action === 'select-paula')  { myPlayer = 'paula';  await joinGame(); }
+
+    if (action === 'add-cat') {
+      const inp = document.getElementById('new-cat');
+      if (!inp.value.trim()) return;
+      const cats = [...(currentState?.categories || DEFAULT_CATEGORIES), inp.value.trim()];
+      await updateGame({ categories: cats });
+      inp.value = '';
+    }
+
+    if (action === 'del-cat') {
+      const idx = parseInt(el.dataset.idx);
+      const cats = [...(currentState?.categories || DEFAULT_CATEGORIES)];
+      cats.splice(idx, 1);
+      await updateGame({ categories: cats });
+    }
+
+    if (action === 'save-cats') {
+      const inputs = document.querySelectorAll('.cat-input');
+      const cats = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+      await updateGame({ categories: cats });
+      showToast('✅ Categorías guardadas');
+    }
+
+    if (action === 'start-game') {
+      const letter = ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+      await updateGame({
+        phase: 'playing',
+        currentLetter: letter,
+        answers: { camilo: {}, paula: {} },
+        votes: {},
+        roundPoints: {},
+        stopper: null
+      });
+    }
+
+    if (action === 'call-stop') {
+      await updateGame({
+        phase: 'stop_called',
+        stopper: myPlayer
+      });
+      setTimeout(async () => {
+        await updateGame({ phase: 'voting' });
+      }, 2000);
+    }
+
+    if (action === 'vote-yes') {
+      const idx = el.dataset.idx;
+      await update(gameRef, { [`votes/${myPlayer}/${idx}`]: true });
+      checkAllVoted();
+    }
+
+    if (action === 'vote-no') {
+      const idx = el.dataset.idx;
+      await update(gameRef, { [`votes/${myPlayer}/${idx}`]: false });
+      checkAllVoted();
+    }
+
+    if (action === 'submit-votes') {
+      await computeAndShowResults();
+    }
+
+    if (action === 'next-round') {
+      await updateGame({ phase: 'lobby', stopper: null, answers: {}, votes: {}, roundPoints: {} });
+    }
+  }
+
+  async function checkAllVoted() {
+    const snap = await get(gameRef);
+    const state = snap.val();
+    const cats = state?.categories || DEFAULT_CATEGORIES;
+    const votesC = state?.votes?.camilo || {};
+    const votesP = state?.votes?.paula || {};
+    if (Object.keys(votesC).length === cats.length && Object.keys(votesP).length === cats.length) {
+      await computeAndShowResults();
+    }
+  }
+
+  async function computeAndShowResults() {
+    const snap = await get(gameRef);
+    const state = snap.val();
+    const cats = state?.categories || DEFAULT_CATEGORIES;
+    const answersC = state?.answers?.camilo || {};
+    const answersP = state?.answers?.paula || {};
+    const votesC = state?.votes?.camilo || {}; // camilo votando a paula
+    const votesP = state?.votes?.paula || {}; // paula votando a camilo
+
+    const roundPtsC = {};
+    const roundPtsP = {};
+
+    cats.forEach((_, i) => {
+      const aC = (answersC[i] || '').trim().toLowerCase();
+      const aP = (answersP[i] || '').trim().toLowerCase();
+      const letter = (state?.currentLetter || '').toLowerCase();
+
+      const cValid = votesP[i] !== false && aC && aC.startsWith(letter);
+      const pValid = votesC[i] !== false && aP && aP.startsWith(letter);
+
+      if (cValid && pValid && aC === aP) {
+        roundPtsC[i] = 50; roundPtsP[i] = 50;
+      } else if (cValid && pValid) {
+        roundPtsC[i] = 100; roundPtsP[i] = 100;
+      } else if (cValid) {
+        roundPtsC[i] = 100; roundPtsP[i] = 0;
+      } else if (pValid) {
+        roundPtsC[i] = 0; roundPtsP[i] = 100;
+      } else {
+        roundPtsC[i] = 0; roundPtsP[i] = 0;
+      }
+    });
+
+    const totalC = (state?.scores?.camilo || 0) + Object.values(roundPtsC).reduce((a,b) => a+b, 0);
+    const totalP = (state?.scores?.paula || 0) + Object.values(roundPtsP).reduce((a,b) => a+b, 0);
+
+    await updateGame({
+      phase: 'results',
+      roundPoints: { camilo: roundPtsC, paula: roundPtsP },
+      scores: { camilo: totalC, paula: totalP }
+    });
+  }
+
+  async function joinGame() {
+    const existing = await getGame();
+    if (!existing) {
+      await setGame({
+        phase: 'lobby',
+        categories: DEFAULT_CATEGORIES,
+        players: { camilo: { online: false }, paula: { online: false } },
+        scores: { camilo: 0, paula: 0 },
+        answers: {},
+        votes: {},
+        roundPoints: {}
+      });
+    }
+    await update(ref(db, `stop_game/players/${myPlayer}`), { online: true });
+    listenGame(render);
+    render(currentState);
+  }
+
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2000);
+  }
+
+  // ── BOOT ──
+  window.addEventListener('DOMContentLoaded', () => render({}));
+</script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700;800&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0d0d;
+    --surface: #1a1a1a;
+    --surface2: #252525;
+    --border: #333;
+    --camilo: #FF6B35;
+    --paula: #C77DFF;
+    --white: #f5f5f5;
+    --muted: #888;
+    --yes: #2ecc71;
+    --no: #e74c3c;
+    --radius: 12px;
+  }
+
+  body {
+    font-family: 'Space Grotesk', sans-serif;
+    background: var(--bg);
+    color: var(--white);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+  }
+
+  #app {
+    width: 100%;
+    max-width: 480px;
+    min-height: 100vh;
+  }
+
+  .screen { width: 100%; padding-bottom: 80px; }
+  .center-screen {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    min-height: 100vh; gap: 24px; padding: 32px;
+  }
+
+  /* LOGO */
+  .logo {
+    font-size: 72px; font-weight: 800;
+    letter-spacing: 16px;
+    background: linear-gradient(135deg, var(--camilo), var(--paula));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .logo-sm { font-size: 20px; font-weight: 800; letter-spacing: 4px; color: var(--white); }
+  .sub { color: var(--muted); font-size: 16px; }
+
+  /* PLAYER SELECT */
+  .player-btns { display: flex; gap: 16px; }
+  .player-btn {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 8px; padding: 24px 32px; border: 2px solid var(--border);
+    border-radius: var(--radius); background: var(--surface);
+    color: var(--white); font-family: inherit; font-size: 18px;
+    font-weight: 700; cursor: pointer; transition: all .2s;
+  }
+  .player-emoji { font-size: 48px; }
+  .camilo-btn:hover { border-color: var(--camilo); box-shadow: 0 0 24px var(--camilo)44; }
+  .paula-btn:hover  { border-color: var(--paula);  box-shadow: 0 0 24px var(--paula)44; }
+
+  /* HEADER */
+  .header-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: var(--bg); z-index: 10;
+  }
+  .player-tag {
+    font-size: 14px; font-weight: 700; padding: 4px 12px;
+    border-radius: 999px;
+  }
+  .player-tag.camilo { background: var(--camilo)22; color: var(--camilo); }
+  .player-tag.paula  { background: var(--paula)22;  color: var(--paula); }
+  .scores-mini { display: flex; gap: 16px; font-weight: 700; font-size: 14px; }
+  .scores-mini .camilo { color: var(--camilo); }
+  .scores-mini .paula  { color: var(--paula); }
+  .round-tag { font-size: 13px; color: var(--muted); font-weight: 600; }
+
+  /* LOBBY */
+  .lobby-section { padding: 24px 20px; display: flex; flex-direction: column; gap: 24px; }
+  .lobby-section h2 { font-size: 24px; font-weight: 800; }
+  .online-status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); flex-wrap: wrap; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status-dot.on  { background: var(--yes); box-shadow: 0 0 8px var(--yes); }
+  .status-dot.off { background: var(--muted); }
+
+  /* CATEGORIES */
+  .categories-section { display: flex; flex-direction: column; gap: 12px; }
+  .section-label { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  .edit-hint { font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .cat-list { display: flex; flex-direction: column; gap: 6px; }
+  .cat-chip {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px;
+  }
+  .cat-input {
+    flex: 1; background: transparent; border: none; color: var(--white);
+    font-family: inherit; font-size: 14px; outline: none;
+  }
+  .cat-del {
+    background: none; border: none; color: var(--muted);
+    cursor: pointer; font-size: 12px; padding: 2px 4px;
+    transition: color .2s;
+  }
+  .cat-del:hover { color: var(--no); }
+  .add-cat-row { display: flex; gap: 8px; }
+  .new-cat-input {
+    flex: 1; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; color: var(--white);
+    font-family: inherit; font-size: 14px; outline: none;
+  }
+  .new-cat-input:focus { border-color: var(--camilo); }
+  .save-btn { align-self: flex-start; }
+
+  /* SCORE PREVIEW */
+  .score-preview { display: flex; gap: 12px; }
+  .score-card {
+    flex: 1; display: flex; justify-content: space-between; align-items: center;
+    padding: 16px; border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .score-card.camilo { border-color: var(--camilo)44; }
+  .score-card.paula  { border-color: var(--paula)44; }
+  .score-name { font-size: 14px; font-weight: 600; }
+  .score-val { font-size: 28px; font-weight: 800; }
+  .score-card.camilo .score-val { color: var(--camilo); }
+  .score-card.paula  .score-val { color: var(--paula); }
+
+  /* BUTTONS */
+  .btn-primary {
+    background: linear-gradient(135deg, var(--camilo), var(--paula));
+    border: none; border-radius: var(--radius); color: #000;
+    font-family: inherit; font-size: 16px; font-weight: 800;
+    padding: 14px 24px; cursor: pointer; transition: opacity .2s;
+    width: 100%;
+  }
+  .btn-primary:hover { opacity: .9; }
+  .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-primary.big-btn { padding: 18px; font-size: 18px; }
+  .btn-secondary {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--white); font-family: inherit;
+    font-size: 14px; font-weight: 600; padding: 10px 16px;
+    cursor: pointer; transition: border-color .2s;
+  }
+  .btn-secondary:hover { border-color: var(--camilo); }
+
+  /* PLAYING */
+  .playing-screen { padding-bottom: 120px; }
+  .letter-display {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 32px 0 24px;
+  }
+  .letter-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
+  .letter-circle {
+    width: 100px; height: 100px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--camilo), var(--paula));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 56px; font-weight: 900; color: #000;
+    box-shadow: 0 0 40px var(--camilo)44;
+  }
+  .answers-form { padding: 0 20px; display: flex; flex-direction: column; gap: 10px; }
+  .answer-row { display: flex; flex-direction: column; gap: 4px; }
+  .answer-label { font-size: 12px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+  .answer-input {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; color: var(--white);
+    font-family: inherit; font-size: 15px; outline: none; transition: border-color .2s;
+  }
+  .answer-input:focus { border-color: var(--camilo); }
+  .answer-input:disabled { opacity: .5; }
+
+  .btn-stop {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--no); border: none; border-radius: 999px;
+    color: #fff; font-family: inherit; font-size: 20px; font-weight: 900;
+    padding: 16px 48px; cursor: pointer;
+    box-shadow: 0 4px 32px var(--no)88;
+    transition: transform .1s, box-shadow .1s;
+    z-index: 100;
+  }
+  .btn-stop:hover { transform: translateX(-50%) scale(1.05); box-shadow: 0 6px 40px var(--no)aa; }
+  .btn-stop:active { transform: translateX(-50%) scale(.97); }
+
+  .stop-called-banner {
+    margin: 20px; padding: 16px; border-radius: var(--radius);
+    background: var(--no)22; border: 1px solid var(--no)44;
+    color: var(--no); font-weight: 700; text-align: center;
+  }
+
+  /* STOP SPLASH */
+  .stop-splash { font-size: 80px; }
+  .stop-text { font-size: 48px; font-weight: 900; color: var(--no); letter-spacing: 8px; }
+  .stop-who { font-size: 16px; color: var(--muted); }
+  .loading-dots { color: var(--muted); font-size: 14px; margin-top: 8px; }
+  @keyframes blink { 0%,100%{opacity:1}50%{opacity:0} }
+  .dot-anim { animation: blink 1s infinite; }
+
+  /* VOTING */
+  .voting-section { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .voting-section h2 { font-size: 22px; font-weight: 800; }
+  .hint { font-size: 14px; color: var(--muted); }
+  .hint.center { text-align: center; }
+  .vote-row {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: border-color .2s;
+  }
+  .vote-row.voted-yes { border-color: var(--yes)66; background: var(--yes)0d; }
+  .vote-row.voted-no  { border-color: var(--no)66;  background: var(--no)0d; }
+  .vote-cat { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
+  .vote-ans { font-size: 18px; font-weight: 700; }
+  .vote-btns { display: flex; gap: 8px; }
+  .vote-yes, .vote-no {
+    flex: 1; padding: 8px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--white); font-family: inherit;
+    font-size: 13px; font-weight: 600; cursor: pointer; transition: all .2s;
+  }
+  .vote-yes.active { background: var(--yes)33; border-color: var(--yes); color: var(--yes); }
+  .vote-no.active  { background: var(--no)33;  border-color: var(--no);  color: var(--no); }
+
+  /* RESULTS */
+  .letter-pill {
+    margin: 16px 20px 0; padding: 8px 16px;
+    background: var(--surface); border-radius: 999px;
+    display: inline-block; font-size: 14px; color: var(--muted);
+  }
+  .results-table { margin: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .results-header {
+    display: grid; grid-template-columns: 1.5fr 1fr 1fr;
+    background: var(--surface2); padding: 10px 14px;
+    font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+  }
+  .results-row {
+    display: grid; grid-template-columns: 1.5fr 1fr 1fr;
+    padding: 12px 14px; border-top: 1px solid var(--border);
+  }
+  .res-cat { font-size: 13px; color: var(--muted); align-self: center; }
+  .res-ans { font-size: 13px; font-weight: 600; }
+  .res-ans small { font-size: 11px; font-weight: 400; }
+  .res-ans.unique { color: var(--yes); }
+  .res-ans.shared { color: #f39c12; }
+  .res-ans.zero   { color: var(--no); }
+
+  .round-totals { display: flex; gap: 12px; margin: 0 20px 16px; }
+  .round-total {
+    flex: 1; text-align: center; padding: 14px; border-radius: var(--radius);
+    font-size: 20px; font-weight: 800;
+  }
+  .round-total.camilo { background: var(--camilo)22; color: var(--camilo); }
+  .round-total.paula  { background: var(--paula)22;  color: var(--paula); }
+
+  .total-scores { display: flex; gap: 12px; margin: 0 20px 24px; }
+  .total-card {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    padding: 20px; border-radius: var(--radius); border: 2px solid;
+  }
+  .total-card.camilo { border-color: var(--camilo); }
+  .total-card.paula  { border-color: var(--paula); }
+  .total-name { font-size: 14px; font-weight: 600; color: var(--muted); }
+  .total-pts  { font-size: 40px; font-weight: 900; }
+  .total-card.camilo .total-pts { color: var(--camilo); }
+  .total-card.paula  .total-pts { color: var(--paula); }
+
+  .waiting-msg {
+    margin: 0 20px; padding: 16px; border-radius: var(--radius);
+    background: var(--surface); color: var(--muted);
+    text-align: center; font-size: 15px;
+  }
+
+  /* TOAST */
+  .toast {
+    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 10px 20px;
+    font-size: 14px; font-weight: 600; z-index: 999;
+    animation: fadeInOut 2s ease;
+  }
+  @keyframes fadeInOut { 0%{opacity:0;transform:translateX(-50%) translateY(10px)} 20%{opacity:1;transform:translateX(-50%) translateY(0)} 80%{opacity:1} 100%{opacity:0} }
+
+  /* MISC */
+  button:focus-visible { outline: 2px solid var(--camilo); outline-offset: 2px; }
+  @media (max-width: 420px) { .letter-circle { width: 80px; height: 80px; font-size: 44px; } }
+</style>
+
+</head>
+<body>
+  <div id="app">
+    <div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#888;">Cargando...</div>
+  </div>
+</body>
+</html>
