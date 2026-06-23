@@ -68,23 +68,48 @@
   // ──────────────────────────────────────────────
   // RENDER ENGINE
   // ──────────────────────────────────────────────
+  let lastPhase = null;
+
   function render(state) {
     const app = document.getElementById('app');
 
     if (!myPlayer) {
       app.innerHTML = renderSelectPlayer();
+      lastPhase = null;
       return;
     }
 
     const phase = state?.phase || 'lobby';
 
+    // During 'playing', never re-render (destroys input focus on each keystroke).
+    // Only update UI minimally if STOP was called.
+    if (phase === 'playing' && lastPhase === 'playing') {
+      if (state?.stopper && !document.getElementById('stop-banner')) {
+        const form = document.getElementById('answers-form');
+        if (form) {
+          const b = document.createElement('div');
+          b.id = 'stop-banner';
+          b.className = 'stop-called-banner';
+          b.textContent = state.stopper === myPlayer
+            ? '\u{1F6D1} \u00a1Vos gritaste STOP!'
+            : (state.stopper === 'camilo' ? '\u{1F9D4} Camilo' : '\u{1F469} Paula') + ' grit\u00f3 STOP!';
+          form.after(b);
+          document.querySelectorAll('.answer-input').forEach(i => i.disabled = true);
+          const btn = document.querySelector('.btn-stop');
+          if (btn) btn.style.display = 'none';
+        }
+      }
+      return;
+    }
+
     if (phase === 'lobby') app.innerHTML = renderLobby(state);
-    else if (phase === 'playing') app.innerHTML = renderPlaying(state);
+    else if (phase === 'playing') { app.innerHTML = renderPlaying(state); bindEvents(state); }
     else if (phase === 'stop_called') app.innerHTML = renderStopCalled(state);
     else if (phase === 'voting') app.innerHTML = renderVoting(state);
     else if (phase === 'results') app.innerHTML = renderResults(state);
 
-    bindEvents(state);
+    if (phase !== 'playing') bindEvents(state);
+    lastPhase = phase;
   }
 
   // ──────────────────────────────────────────────
@@ -167,7 +192,9 @@
         ${isHost ? `
         <button data-action="start-game" class="btn-primary big-btn" ${!otherOnline ? 'disabled' : ''}>
           ${!otherOnline ? '⏳ Esperando a Paula...' : '🎲 Sortear letra y empezar'}
-        </button>` : `
+        </button>
+        <button data-action="reset-scores" class="btn-secondary reset-btn">🔄 Reiniciar puntajes</button>
+        ` : `
         <div class="waiting-msg">⏳ Esperando que Camilo inicie la ronda...</div>
         `}
       </div>
@@ -419,6 +446,13 @@
 
     if (action === 'next-round') {
       await updateGame({ phase: 'lobby', stopper: null, answers: {}, votes: {}, roundPoints: {} });
+    }
+
+    if (action === 'reset-scores') {
+      if (confirm('¿Reiniciar los puntajes a cero?')) {
+        await updateGame({ scores: { camilo: 0, paula: 0 } });
+        showToast('🔄 Puntajes reiniciados');
+      }
     }
   }
 
@@ -781,6 +815,13 @@
   .total-pts  { font-size: 40px; font-weight: 900; }
   .total-card.camilo .total-pts { color: var(--camilo); }
   .total-card.paula  .total-pts { color: var(--paula); }
+
+  .reset-btn {
+    width: 100%; margin-top: -8px;
+    color: var(--muted);
+    border-color: transparent;
+  }
+  .reset-btn:hover { color: var(--no); border-color: var(--no)44; }
 
   .waiting-msg {
     margin: 0 20px; padding: 16px; border-radius: var(--radius);
